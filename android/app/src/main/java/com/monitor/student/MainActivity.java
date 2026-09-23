@@ -1,21 +1,31 @@
 package com.monitor.student;
 
 import android.Manifest;
+import android.content.Context;
 import android.content.pm.PackageManager;
 import android.graphics.ImageFormat;
-import android.graphics.Rect;
-import android.graphics.YuvImage;
-import android.hardware.Camera;
+import android.hardware.camera2.CameraAccessException;
+import android.hardware.camera2.CameraCaptureSession;
+import android.hardware.camera2.CameraCharacteristics;
+import android.hardware.camera2.CameraDevice;
+import android.hardware.camera2.CameraManager;
+import android.hardware.camera2.CameraMetadata;
+import android.hardware.camera2.CaptureRequest;
+import android.hardware.camera2.params.StreamConfigurationMap;
+import android.media.Image;
+import android.media.ImageReader;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.HandlerThread;
 import android.util.Base64;
-import android.view.SurfaceHolder;
-import android.view.SurfaceView;
+import android.util.Size;
 import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
@@ -23,18 +33,21 @@ import androidx.core.content.ContextCompat;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.io.ByteArrayOutputStream;
-import java.util.List;
+import java.nio.ByteBuffer;
+import java.util.Collections;
 
 import io.socket.client.IO;
 import io.socket.client.Socket;
 
-public class MainActivity extends AppCompatActivity implements SurfaceHolder.Callback {
+public class MainActivity extends AppCompatActivity {
 
     private Socket socket;
-    private Camera camera;
-    private SurfaceHolder surfaceHolder;
-    private boolean isSurfaceReady = false;
+    private CameraDevice cameraDevice;
+    private CameraCaptureSession captureSession;
+    private ImageReader imageReader;
+    private HandlerThread backgroundThread;
+    private Handler backgroundHandler;
+
     private boolean isStreaming = false;
     private long lastFrameTime = 0;
 
@@ -52,32 +65,55 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
         etServerUrl = findViewById(R.id.etServerUrl);
         etStudentName = findViewById(R.id.etStudentName);
         Button btnConnect = findViewById(R.id.btnConnect);
-        SurfaceView surfaceView = findViewById(R.id.surfaceView);
 
-        surfaceHolder = surfaceView.getHolder();
-        surfaceHolder.addCallback(this);
-
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.CAMERA}, 101);
-        }
+        checkCameraPermission();
 
         btnConnect.setOnClickListener(v -> {
+            if (!checkCameraPermission()) {
+                Toast.makeText(this, "Please allow Camera Permission!", Toast.LENGTH_LONG).show();
+                return;
+            }
             String url = etServerUrl.getText().toString().trim();
             String name = etStudentName.getText().toString().trim();
             if (!url.isEmpty() && !name.isEmpty()) {
                 connectToServer(url, name);
             } else {
-                Toast.makeText(this, "URL and Name are required", Toast.LENGTH_SHORT).show() ;
+                Toast.makeText(this, "URL and Name are required", Toast.LENGTH_SHORT).show();
             }
         });
+    }
+
+    private boolean checkCameraPermission() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.CAMERA}, 101);
+            return false;
+        }
+        return true;
+    }
+
+    private void startBackgroundThread() {
+        if (backgroundThread == null) {
+            backgroundThread = new HandlerThread("CameraBackground");
+            backgroundThread.start();
+            backgroundHandler = new Handler(backgroundThread.getLooper());
+        }
+    }
+
+    private void stopBackgroundThread() {
+        if (backgroundThread != null) {
+            backgroundThread.quitSafely();
+            try {
+                backgroundThread.join();
+                backgroundThread = null;
+                backgroundHandler = null;
+            } catch (InterruptedException ignored) {}
+        }
     }
 
     private void connectToServer(String url, String studentId) {
         tvStatus.setText("Status: Connecting...");
         try {
-            if (socket != null) {
-                socket.disconnect();
-            }
+            if (socket != null) socket.disconnect();
             socket = IO.socket(url);
             socket.connect();
 
@@ -93,17 +129,17 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
 
             socket.on("start-stream", args -> runOnUiThread(() -> {
                 tvStatus.setText("Status: Monitoring Active");
-                startCameraStream();
+                startCamera2Stream();
             }));
 
             socket.on("stop-stream", args -> runOnUiThread(() -> {
                 tvStatus.setText("Status: Online (Idle)");
-                stopCameraStream();
+                stopCamera2Stream();
             }));
 
             socket.on(Socket.EVENT_DISCONNECT, args -> runOnUiThread(() -> {
                 tvStatus.setText("Status: Disconnected");
-                stopCameraStream();
+                stopCamera2Stream();
             }));
 
         } catch (Exception e) {
@@ -111,101 +147,150 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
         }
     }
 
-    private void startCameraStream() {
+    private void startCamera2Stream() {
         if (isStreaming) return;
-        try {
-            int frontCamId = findFrontFacingCamera();
-            camera = Camera.open(frontCamId != -1 ? frontCamId : 0);
-            camera.setDisplayOrientation(90);
+        startBackgroundThread();
 
-            Camera.Parameters params = camera.getParameters();
-            List<Camera.Size> sizes = params.getSupportedPreviewSizes();
-            Camera.Size chosenSize = sizes.get(0);
-            for (Camera.Size s : sizes) {
-                if (s.width <= 640 && s.height <= 480) {
-                    chosenSize = s;
+        CameraManager manager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
+        try {
+            String cameraId = null;
+            for (String id : manager.getCameraIdList()) {
+                CameraCharacteristics characteristics = manager.getCameraCharacteristics(id);
+                Integer facing = characteristics.get(CameraCharacteristics.LENS_FACING);
+                if (facing != null && facing == CameraCharacteristics.LENS_FACING_FRONT) {
+                    cameraId = id;
                     break;
                 }
             }
-            params.setPreviewSize(chosenSize.width, chosenSize.height);
-            camera.setParameters(params);
-
-            if (isSurfaceReady && surfaceHolder != null) {
-                camera.setPreviewDisplay(surfaceHolder);
+            if (cameraId == null && manager.getCameraIdList().length > 0) {
+                cameraId = manager.getCameraIdList()[0];
             }
 
-            final int pWidth = chosenSize.width;
-            final int pHeight = chosenSize.height;
+            if (cameraId == null) {
+                tvStatus.setText("No camera found");
+                return;
+            }
 
-            camera.setPreviewCallback((data, cam) -> {
-                long now = System.currentTimeMillis();
-                if (isStreaming && now - lastFrameTime > 120 && socket != null && socket.connected() && data != null) {
-                    lastFrameTime = now;
-                    try {
-                        YuvImage yuvImage = new YuvImage(data, ImageFormat.NV21, pWidth, pHeight, null);
-                        ByteArrayOutputStream os = new ByteArrayOutputStream();
-                        yuvImage.compressToJpeg(new Rect(0, 0, pWidth, pHeight), 45, os);
-                        byte[] jpegBytes = os.toByteArray();
-                        String base64 = Base64.encodeToString(jpegBytes, Base64.NO_WRAP);
-                        socket.emit("stream-frame", base64);
-                    } catch (Exception ignored) {}
+            CameraCharacteristics characteristics = manager.getCameraCharacteristics(cameraId);
+            StreamConfigurationMap map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+            Size chosenSize = new Size(480, 360);
+            if (map != null) {
+                Size[] jpegSizes = map.getOutputSizes(ImageFormat.JPEG);
+                if (jpegSizes != null && jpegSizes.length > 0) {
+                    chosenSize = jpegSizes[jpegSizes.length - 1];
+                    for (Size s : jpegSizes) {
+                        if (s.getWidth() <= 640 && s.getHeight() <= 480 && s.getWidth() >= 320) {
+                            chosenSize = s;
+                            break;
+                        }
+                    }
                 }
-            });
-
-            camera.startPreview();
-            isStreaming = true;
-        } catch (Exception e) {
-            tvStatus.setText("Camera Error: " + e.getMessage());
-        }
-    }
-
-    private void stopCameraStream() {
-        isStreaming = false;
-        if (camera != null) {
-            try {
-                camera.setPreviewCallback(null);
-                camera.stopPreview();
-                camera.release();
-            } catch (Exception ignored) {}
-            camera = null;
-        }
-    }
-
-    private int findFrontFacingCamera() {
-        int count = Camera.getNumberOfCameras();
-        for (int i = 0; i < count; i++) {
-            Camera.CameraInfo info = new Camera.CameraInfo();
-            Camera.getCameraInfo(i, info);
-            if (info.facing == Camera.CameraInfo.CAMERA_FACING_FRONT) {
-                return i;
             }
+
+            imageReader = ImageReader.newInstance(chosenSize.getWidth(), chosenSize.getHeight(), ImageFormat.JPEG, 2);
+            imageReader.setOnImageAvailableListener(reader -> {
+                Image image = null;
+                try {
+                    image = reader.acquireLatestImage();
+                    if (image != null && isStreaming) {
+                        long now = System.currentTimeMillis();
+                        if (now - lastFrameTime > 120) {
+                            lastFrameTime = now;
+                            ByteBuffer buffer = image.getPlanes()[0].getBuffer();
+                            byte[] bytes = new byte[buffer.remaining()];
+                            buffer.get(bytes);
+                            String base64 = Base64.encodeToString(bytes, Base64.NO_WRAP);
+                            if (socket != null && socket.connected()) {
+                                socket.emit("stream-frame", base64);
+                            }
+                        }
+                    }
+                } catch (Exception ignored) {
+                } finally {
+                    if (image != null) image.close();
+                }
+            }, backgroundHandler);
+
+            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                return;
+            }
+
+            manager.openCamera(cameraId, new CameraDevice.StateCallback() {
+                @Override
+                public void onOpened(@NonNull CameraDevice camera) {
+                    cameraDevice = camera;
+                    try {
+                        CaptureRequest.Builder builder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
+                        builder.addTarget(imageReader.getSurface());
+                        builder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO);
+
+                        cameraDevice.createCaptureSession(Collections.singletonList(imageReader.getSurface()), new CameraCaptureSession.StateCallback() {
+                            @Override
+                            public void onConfigured(@NonNull CameraCaptureSession session) {
+                                captureSession = session;
+                                try {
+                                    session.setRepeatingRequest(builder.build(), null, backgroundHandler);
+                                    isStreaming = true;
+                                } catch (Exception e) {
+                                    runOnUiThread(() -> tvStatus.setText("Stream Error: " + e.getMessage()));
+                                }
+                            }
+
+                            @Override
+                            public void onConfigureFailed(@NonNull CameraCaptureSession session) {
+                                runOnUiThread(() -> tvStatus.setText("Session configuration failed"));
+                            }
+                        }, backgroundHandler);
+                    } catch (Exception e) {
+                        runOnUiThread(() -> tvStatus.setText("Capture Request Error: " + e.getMessage()));
+                    }
+                }
+
+                @Override
+                public void onDisconnected(@NonNull CameraDevice camera) {
+                    camera.close();
+                    cameraDevice = null;
+                    isStreaming = false;
+                }
+
+                @Override
+                public void onError(@NonNull CameraDevice camera, int error) {
+                    camera.close();
+                    cameraDevice = null;
+                    isStreaming = false;
+                    runOnUiThread(() -> tvStatus.setText("Camera2 Error: Code " + error));
+                }
+            }, backgroundHandler);
+
+        } catch (CameraAccessException e) {
+            tvStatus.setText("Camera Access Error: " + e.getMessage());
         }
-        return -1;
     }
 
-    @Override
-    public void surfaceCreated(SurfaceHolder holder) {
-        isSurfaceReady = true;
-        surfaceHolder = holder;
-        if (isStreaming && camera != null) {
-            try {
-                camera.setPreviewDisplay(holder);
-            } catch (Exception ignored) {}
-        }
-    }
-
-    @Override
-    public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {}
-
-    @Override
-    public void surfaceDestroyed(SurfaceHolder holder) {
-        isSurfaceReady = false;
+    private void stopCamera2Stream() {
+        isStreaming = false;
+        try {
+            if (captureSession != null) {
+                captureSession.stopRepeating();
+                captureSession.close();
+                captureSession = null;
+            }
+            if (cameraDevice != null) {
+                cameraDevice.close();
+                cameraDevice = null;
+            }
+            if (imageReader != null) {
+                imageReader.close();
+                imageReader = null;
+            }
+        } catch (Exception ignored) {}
+        stopBackgroundThread();
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        stopCameraStream();
+        stopCamera2Stream();
         if (socket != null) {
             socket.disconnect();
             socket = null;
