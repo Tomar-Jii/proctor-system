@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:padding="24dp"
+    android:background="#121212">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Student Proctoring Client"
+        android:textColor="#FFFFFF"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="24dp" />
+
+    <EditText
+        android:id="@+id/etServerUrl"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Render Server URL (e.g. https://...)"
+        android:textColor="#FFFFFF"
+        android:textColorHint="#888888"
+        android:inputType="textUri"
+        android:layout_marginBottom="16dp" />
+
+    <EditText
+        android:id="@+id/etStudentName"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Student Name / Roll No"
+        android:textColor="#FFFFFF"
+        android:textColorHint="#888888"
+        android:layout_marginBottom="24dp" />
+
+    <Button
+        android:id="@+id/btnConnect"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Start Monitoring" />
+
+    <TextView
+        android:id="@+id/tvStatus"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Status: Disconnected"
+        android:textColor="#AAAAAA"
+        android:layout_marginTop="20dp" />
+</LinearLayout>
