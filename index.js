@@ -11,6 +11,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 const students = new Map();
 const admins = new Set();
+let currentViewedStudent = null;
 
 io.on('connection', (socket) => {
   socket.on('register', ({ role, id }) => {
@@ -27,35 +28,40 @@ io.on('connection', (socket) => {
   });
 
   socket.on('request-stream', ({ studentId }) => {
-    const studentSocketId = students.get(studentId);
-    if (studentSocketId) {
-      io.to(studentSocketId).emit('start-stream', { adminSocketId: socket.id });
+    if (currentViewedStudent && currentViewedStudent !== studentId) {
+      const prev = students.get(currentViewedStudent);
+      if (prev) io.to(prev).emit('stop-stream');
+    }
+    currentViewedStudent = studentId;
+    const targetSocket = students.get(studentId);
+    if (targetSocket) {
+      io.to(targetSocket).emit('start-stream');
     }
   });
 
-  socket.on('offer', ({ targetSocketId, sdp }) => {
-    io.to(targetSocketId).emit('offer', { senderSocketId: socket.id, sdp });
-  });
-
-  socket.on('answer', ({ targetSocketId, sdp }) => {
-    io.to(targetSocketId).emit('answer', { sdp });
-  });
-
-  socket.on('ice-candidate', ({ targetSocketId, candidate }) => {
-    io.to(targetSocketId).emit('ice-candidate', { candidate });
+  socket.on('stream-frame', (base64) => {
+    io.to(Array.from(admins)).emit('frame', {
+      studentId: socket.customId,
+      image: base64
+    });
   });
 
   socket.on('stop-stream', ({ studentId }) => {
-    const studentSocketId = students.get(studentId);
-    if (studentSocketId) {
-      io.to(studentSocketId).emit('stop-stream');
+    const targetSocket = students.get(studentId);
+    if (targetSocket) {
+      io.to(targetSocket).emit('stop-stream');
     }
+    if (currentViewedStudent === studentId) currentViewedStudent = null;
   });
 
   socket.on('disconnect', () => {
     if (socket.role === 'student') {
       students.delete(socket.customId);
       io.to(Array.from(admins)).emit('student-list', Array.from(students.keys()));
+      if (currentViewedStudent === socket.customId) {
+        currentViewedStudent = null;
+        io.to(Array.from(admins)).emit('student-offline', socket.customId);
+      }
     } else if (socket.role === 'admin') {
       admins.delete(socket.id);
     }

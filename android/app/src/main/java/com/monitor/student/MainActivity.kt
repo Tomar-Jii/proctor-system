@@ -2,29 +2,33 @@ package com.monitor.student
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.os.Bundle
+import android.util.Base64
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import io.socket.client.IO
 import io.socket.client.Socket
 import org.json.JSONObject
-import org.webrtc.*
+import java.io.ByteArrayOutputStream
+import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
 
     private var socket: Socket? = null
-    private var peerConnectionFactory: PeerConnectionFactory? = null
-    private var peerConnection: PeerConnection? = null
-    private var videoCapturer: VideoCapturer? = null
-    private var videoTrack: VideoTrack? = null
-    private var eglBase: EglBase? = null
-    private var targetAdminSocketId: String? = null
+    private var isStreaming = false
+    private var lastFrameTime = 0L
+    private val cameraExecutor = Executors.newSingleThreadExecutor()
 
     private lateinit var tvStatus: TextView
     private lateinit var etServerUrl: EditText
@@ -43,18 +47,6 @@ class MainActivity : AppCompatActivity() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), 101)
         }
-
-        val initOptions = PeerConnectionFactory.InitializationOptions.builder(this)
-            .createInitializationOptions()
-        PeerConnectionFactory.initialize(initOptions)
-
-        eglBase = EglBase.create()
-        val eglContext = eglBase!!.eglBaseContext
-
-        peerConnectionFactory = PeerConnectionFactory.builder()
-            .setVideoEncoderFactory(DefaultVideoEncoderFactory(eglContext, true, true))
-            .setVideoDecoderFactory(DefaultVideoDecoderFactory(eglContext))
-            .createPeerConnectionFactory()
 
         btnConnect.setOnClickListener {
             val url = etServerUrl.text.toString().trim()
@@ -82,133 +74,84 @@ class MainActivity : AppCompatActivity() {
                 socket?.emit("register", reg)
             }
 
-            socket?.on("start-stream") { args ->
-                val data = args[0] as JSONObject
-                targetAdminSocketId = data.getString("adminSocketId")
+            socket?.on("start-stream") {
+                isStreaming = true
                 runOnUiThread {
-                    tvStatus.text = "Status: Streaming to Admin..."
-                    startStreaming()
+                    tvStatus.text = "Status: Monitoring Active"
+                    startCamera()
                 }
             }
 
-            socket?.on("answer") { args ->
-                val data = args[0] as JSONObject
-                val sdpObj = data.getJSONObject("sdp")
-                val sdp = SessionDescription(SessionDescription.Type.ANSWER, sdpObj.getString("sdp"))
-                peerConnection?.setRemoteDescription(SimpleSdpObserver(), sdp)
-            }
-
-            socket?.on("ice-candidate") { args ->
-                val data = args[0] as JSONObject
-                val c = data.getJSONObject("candidate")
-                val candidate = IceCandidate(c.getString("sdpMid"), c.getInt("sdpMLineIndex"), c.getString("candidate"))
-                peerConnection?.addIceCandidate(candidate)
-            }
-
             socket?.on("stop-stream") {
+                isStreaming = false
                 runOnUiThread {
-                    stopStream()
+                    stopCamera()
                     tvStatus.text = "Status: Online (Idle)"
                 }
             }
         } catch (e: Exception) {
-            tvStatus.text = "Error: ${e.message}"
+            runOnUiThread { tvStatus.text = "Error: ${e.message}" }
         }
     }
 
-    private fun startStreaming() {
-        val factory = peerConnectionFactory ?: return
-        val eglContext = eglBase?.eglBaseContext ?: return
+    private fun startCamera() {
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
+        cameraProviderFuture.addListener({
+            val cameraProvider = cameraProviderFuture.get()
 
-        videoCapturer = createCameraCapturer() ?: return
-        val surfaceHelper = SurfaceTextureHelper.create("CaptureThread", eglContext)
-        val videoSource = factory.createVideoSource(videoCapturer!!.isScreencast)
-        videoCapturer?.initialize(surfaceHelper, this, videoSource.capturerObserver)
-        videoCapturer?.startCapture(480, 360, 15)
+            val imageAnalysis = ImageAnalysis.Builder()
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .build()
 
-        videoTrack = factory.createVideoTrack("100", videoSource)
-
-        val iceServers = listOf(PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer())
-        val rtcConfig = PeerConnection.RTCConfiguration(iceServers)
-
-        peerConnection = factory.createPeerConnection(rtcConfig, object : PeerConnection.Observer {
-            override fun onIceCandidate(cand: IceCandidate?) {
-                cand?.let {
-                    val cJson = JSONObject().apply {
-                        put("candidate", it.sdp)
-                        put("sdpMid", it.sdpMid)
-                        put("sdpMLineIndex", it.sdpMLineIndex)
-                    }
-                    val payload = JSONObject().apply {
-                        put("targetSocketId", targetAdminSocketId)
-                        put("candidate", cJson)
-                    }
-                    socket?.emit("ice-candidate", payload)
+            imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
+                val now = System.currentTimeMillis()
+                // Send ~8 frames per second to save data (120ms gap)
+                if (isStreaming && now - lastFrameTime > 120) {
+                    lastFrameTime = now
+                    try {
+                        val rawBitmap = imageProxy.toBitmap()
+                        val matrix = Matrix().apply {
+                            postRotate(imageProxy.imageInfo.rotationDegrees.toFloat())
+                        }
+                        val bitmap = Bitmap.createBitmap(rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true)
+                        val out = ByteArrayOutputStream()
+                        bitmap.compress(Bitmap.CompressFormat.JPEG, 45, out)
+                        val bytes = out.toByteArray()
+                        val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                        socket?.emit("stream-frame", base64)
+                    } catch (_: Exception) {}
                 }
+                imageProxy.close()
             }
-            override fun onIceCandidatesRemoved(p0: Array<out IceCandidate>?) {}
-            override fun onSignalingChange(s: PeerConnection.SignalingState?) {}
-            override fun onIceConnectionChange(s: PeerConnection.IceConnectionState?) {}
-            override fun onIceConnectionReceivingChange(b: Boolean) {}
-            override fun onIceGatheringChange(s: PeerConnection.IceGatheringState?) {}
-            override fun onAddStream(s: MediaStream?) {}
-            override fun onRemoveStream(s: MediaStream?) {}
-            override fun onDataChannel(d: DataChannel?) {}
-            override fun onRenegotiationNeeded() {}
-            override fun onAddTrack(p0: RtpReceiver?, p1: Array<out MediaStream>?) {}
-        })
 
-        peerConnection?.addTrack(videoTrack, listOf("stream1"))
-
-        peerConnection?.createOffer(object : SimpleSdpObserver() {
-            override fun onCreateSuccess(desc: SessionDescription?) {
-                desc?.let {
-                    peerConnection?.setLocalDescription(SimpleSdpObserver(), it)
-                    val payload = JSONObject().apply {
-                        put("targetSocketId", targetAdminSocketId)
-                        put("sdp", JSONObject().apply {
-                            put("type", "offer")
-                            put("sdp", it.description)
-                        })
-                    }
-                    socket?.emit("offer", payload)
-                }
+            val cameraSelector = if (cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)) {
+                CameraSelector.DEFAULT_FRONT_CAMERA
+            } else {
+                CameraSelector.DEFAULT_BACK_CAMERA
             }
-        }, MediaConstraints())
+
+            try {
+                cameraProvider.unbindAll()
+                cameraProvider.bindToLifecycle(this, cameraSelector, imageAnalysis)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }, ContextCompat.getMainExecutor(this))
     }
 
-    private fun createCameraCapturer(): VideoCapturer? {
-        val enumerator = Camera2Enumerator(this)
-        for (name in enumerator.deviceNames) {
-            if (enumerator.isFrontFacing(name)) return enumerator.createCapturer(name, null)
-        }
-        return if (enumerator.deviceNames.isNotEmpty()) {
-            enumerator.createCapturer(enumerator.deviceNames[0], null)
-        } else null
-    }
-
-    private fun stopStream() {
-        try {
-            videoCapturer?.stopCapture()
-            videoCapturer?.dispose()
-            videoCapturer = null
-            videoTrack?.dispose()
-            videoTrack = null
-            peerConnection?.close()
-            peerConnection = null
-        } catch (_: Exception) {}
+    private fun stopCamera() {
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
+        cameraProviderFuture.addListener({
+            val cameraProvider = cameraProviderFuture.get()
+            cameraProvider.unbindAll()
+        }, ContextCompat.getMainExecutor(this))
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        stopStream()
+        isStreaming = false
+        stopCamera()
+        cameraExecutor.shutdown()
         socket?.disconnect()
-    }
-
-    open class SimpleSdpObserver : SdpObserver {
-        override fun onCreateSuccess(p0: SessionDescription?) {}
-        override fun onSetSuccess() {}
-        override fun onCreateFailure(p0: String?) {}
-        override fun onSetFailure(p0: String?) {}
     }
 }

@@ -9,7 +9,7 @@
         android:allowBackup="true"
         android:icon="@android:drawable/sym_def_app_icon"
         android:label="Classroom Monitor"
-        android:theme="@style/Theme.Material3.DayNight.NoActionBar"
+        android:theme="@style/Theme.StudentProctor"
         android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
