@@ -12,10 +12,12 @@
     ul { list-style: none; padding: 0; margin: 0; }
     li { background: #334155; margin-bottom: 8px; padding: 10px 14px; border-radius: 6px; display: flex; justify-content: space-between; align-items: center; }
     button { background: #3b82f6; border: none; color: white; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-weight: bold; }
-    button.stop { background: #ef4444; margin-top: 15px; display: none; }
+    .controls { margin-top: 15px; display: flex; gap: 10px; }
+    button.stop { background: #ef4444; display: none; }
+    button.rotate { background: #64748b; display: none; }
     .video-box { width: 480px; height: 640px; max-height: 75vh; background: #000; border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center; position: relative; }
-    img#monitorFeed { width: 100%; height: 100%; object-fit: cover; display: none; }
-    .badge { position: absolute; top: 10px; left: 10px; background: #ef4444; color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; display: none; }
+    img#monitorFeed { width: 100%; height: 100%; object-fit: contain; display: none; transition: transform 0.2s; }
+    .badge { position: absolute; top: 10px; left: 10px; background: #ef4444; color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; display: none; z-index: 10; }
   </style>
 </head>
 <body>
@@ -30,12 +32,16 @@
       <span id="placeholder" style="color: #64748b;">Select a student to view camera</span>
       <img id="monitorFeed" alt="Student Feed" />
     </div>
-    <button id="stopBtn" class="stop" onclick="stopViewing()">Stop Feed</button>
+    <div class="controls">
+      <button id="rotateBtn" class="rotate" onclick="rotateFeed()">Rotate 90°</button>
+      <button id="stopBtn" class="stop" onclick="stopViewing()">Stop Feed</button>
+    </div>
   </div>
 
   <script>
     const socket = io();
     let currentStudentId = null;
+    let currentRotation = 0;
 
     socket.emit('register', { role: 'admin', id: 'Admin' });
 
@@ -58,6 +64,7 @@
       document.getElementById('placeholder').textContent = 'Connecting to ' + id + '...';
       document.getElementById('monitorFeed').style.display = 'none';
       document.getElementById('stopBtn').style.display = 'block';
+      document.getElementById('rotateBtn').style.display = 'block';
       document.getElementById('badge').style.display = 'none';
       socket.emit('request-stream', { studentId: id });
     }
@@ -72,12 +79,10 @@
       }
     });
 
-    socket.on('student-offline', (id) => {
-      if (id === currentStudentId) {
-        stopViewing();
-        document.getElementById('placeholder').textContent = id + ' went offline';
-      }
-    });
+    function rotateFeed() {
+      currentRotation = (currentRotation + 90) % 360;
+      document.getElementById('monitorFeed').style.transform = `rotate(${currentRotation}deg)`;
+    }
 
     function stopViewing() {
       if (currentStudentId) socket.emit('stop-stream', { studentId: currentStudentId });
@@ -86,6 +91,7 @@
       document.getElementById('monitorFeed').src = '';
       document.getElementById('badge').style.display = 'none';
       document.getElementById('stopBtn').style.display = 'none';
+      document.getElementById('rotateBtn').style.display = 'none';
       document.getElementById('placeholder').textContent = 'Select a student to view camera';
       document.getElementById('placeholder').style.display = 'block';
     }

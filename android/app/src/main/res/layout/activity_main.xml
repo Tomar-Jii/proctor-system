@@ -10,36 +10,38 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Student Proctoring Client"
+        android:text="Classroom Monitor"
         android:textColor="#FFFFFF"
-        android:textSize="20sp"
+        android:textSize="22sp"
         android:textStyle="bold"
-        android:layout_marginBottom="24dp" />
+        android:layout_marginBottom="20dp" />
 
     <EditText
         android:id="@+id/etServerUrl"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:hint="Render Server URL (e.g. https://...)"
+        android:hint="Render Server URL (https://...)"
         android:textColor="#FFFFFF"
-        android:textColorHint="#888888"
+        android:textColorHint="#777777"
         android:inputType="textUri"
-        android:layout_marginBottom="16dp" />
+        android:layout_marginBottom="12dp" />
 
     <EditText
         android:id="@+id/etStudentName"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:hint="Student Name / Roll No"
+        android:hint="Student Name / Roll Number"
         android:textColor="#FFFFFF"
-        android:textColorHint="#888888"
-        android:layout_marginBottom="24dp" />
+        android:textColorHint="#777777"
+        android:layout_marginBottom="20dp" />
 
     <Button
         android:id="@+id/btnConnect"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Start Monitoring" />
+        android:text="Start Monitoring"
+        android:backgroundTint="#3B82F6"
+        android:textColor="#FFFFFF" />
 
     <TextView
         android:id="@+id/tvStatus"
@@ -47,5 +49,11 @@
         android:layout_height="wrap_content"
         android:text="Status: Disconnected"
         android:textColor="#AAAAAA"
+        android:layout_marginTop="16dp" />
+
+    <SurfaceView
+        android:id="@+id/surfaceView"
+        android:layout_width="160dp"
+        android:layout_height="120dp"
         android:layout_marginTop="20dp" />
 </LinearLayout>
