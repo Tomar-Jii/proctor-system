@@ -19,10 +19,11 @@ import org.webrtc.*
 class MainActivity : AppCompatActivity() {
 
     private var socket: Socket? = null
-    private lateinit var peerConnectionFactory: PeerConnectionFactory
+    private var peerConnectionFactory: PeerConnectionFactory? = null
     private var peerConnection: PeerConnection? = null
     private var videoCapturer: VideoCapturer? = null
     private var videoTrack: VideoTrack? = null
+    private var eglBase: EglBase? = null
     private var targetAdminSocketId: String? = null
 
     private lateinit var tvStatus: TextView
@@ -46,7 +47,14 @@ class MainActivity : AppCompatActivity() {
         val initOptions = PeerConnectionFactory.InitializationOptions.builder(this)
             .createInitializationOptions()
         PeerConnectionFactory.initialize(initOptions)
-        peerConnectionFactory = PeerConnectionFactory.builder().createPeerConnectionFactory()
+
+        eglBase = EglBase.create()
+        val eglContext = eglBase!!.eglBaseContext
+
+        peerConnectionFactory = PeerConnectionFactory.builder()
+            .setVideoEncoderFactory(DefaultVideoEncoderFactory(eglContext, true, true))
+            .setVideoDecoderFactory(DefaultVideoDecoderFactory(eglContext))
+            .createPeerConnectionFactory()
 
         btnConnect.setOnClickListener {
             val url = etServerUrl.text.toString().trim()
@@ -87,7 +95,7 @@ class MainActivity : AppCompatActivity() {
                 val data = args[0] as JSONObject
                 val sdpObj = data.getJSONObject("sdp")
                 val sdp = SessionDescription(SessionDescription.Type.ANSWER, sdpObj.getString("sdp"))
-                peerConnection?.setRemoteDescription(object : SimpleSdpObserver() {}, sdp)
+                peerConnection?.setRemoteDescription(SimpleSdpObserver(), sdp)
             }
 
             socket?.on("ice-candidate") { args ->
@@ -109,29 +117,36 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startStreaming() {
-        videoCapturer = createCameraCapturer()
-        val eglContext = EglBase.create().eglBaseContext
+        val factory = peerConnectionFactory ?: return
+        val eglContext = eglBase?.eglBaseContext ?: return
+
+        videoCapturer = createCameraCapturer() ?: return
         val surfaceHelper = SurfaceTextureHelper.create("CaptureThread", eglContext)
-        val videoSource = peerConnectionFactory.createVideoSource(videoCapturer!!.isScreencast)
+        val videoSource = factory.createVideoSource(videoCapturer!!.isScreencast)
         videoCapturer?.initialize(surfaceHelper, this, videoSource.capturerObserver)
         videoCapturer?.startCapture(480, 360, 15)
 
-        videoTrack = peerConnectionFactory.createVideoTrack("100", videoSource)
+        videoTrack = factory.createVideoTrack("100", videoSource)
 
         val iceServers = listOf(PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer())
-        peerConnection = peerConnectionFactory.createPeerConnection(iceServers, object : PeerConnection.Observer {
-            override fun onIceCandidate(cand: IceCandidate) {
-                val cJson = JSONObject().apply {
-                    put("candidate", cand.sdp)
-                    put("sdpMid", cand.sdpMid)
-                    put("sdpMLineIndex", cand.sdpMLineIndex)
+        val rtcConfig = PeerConnection.RTCConfiguration(iceServers)
+
+        peerConnection = factory.createPeerConnection(rtcConfig, object : PeerConnection.Observer {
+            override fun onIceCandidate(cand: IceCandidate?) {
+                cand?.let {
+                    val cJson = JSONObject().apply {
+                        put("candidate", it.sdp)
+                        put("sdpMid", it.sdpMid)
+                        put("sdpMLineIndex", it.sdpMLineIndex)
+                    }
+                    val payload = JSONObject().apply {
+                        put("targetSocketId", targetAdminSocketId)
+                        put("candidate", cJson)
+                    }
+                    socket?.emit("ice-candidate", payload)
                 }
-                val payload = JSONObject().apply {
-                    put("targetSocketId", targetAdminSocketId)
-                    put("candidate", cJson)
-                }
-                socket?.emit("ice-candidate", payload)
             }
+            override fun onIceCandidatesRemoved(p0: Array<out IceCandidate>?) {}
             override fun onSignalingChange(s: PeerConnection.SignalingState?) {}
             override fun onIceConnectionChange(s: PeerConnection.IceConnectionState?) {}
             override fun onIceConnectionReceivingChange(b: Boolean) {}
@@ -146,16 +161,18 @@ class MainActivity : AppCompatActivity() {
         peerConnection?.addTrack(videoTrack, listOf("stream1"))
 
         peerConnection?.createOffer(object : SimpleSdpObserver() {
-            override fun onCreateSuccess(desc: SessionDescription) {
-                peerConnection?.setLocalDescription(SimpleSdpObserver(), desc)
-                val payload = JSONObject().apply {
-                    put("targetSocketId", targetAdminSocketId)
-                    put("sdp", JSONObject().apply {
-                        put("type", "offer")
-                        put("sdp", desc.description)
-                    })
+            override fun onCreateSuccess(desc: SessionDescription?) {
+                desc?.let {
+                    peerConnection?.setLocalDescription(SimpleSdpObserver(), it)
+                    val payload = JSONObject().apply {
+                        put("targetSocketId", targetAdminSocketId)
+                        put("sdp", JSONObject().apply {
+                            put("type", "offer")
+                            put("sdp", it.description)
+                        })
+                    }
+                    socket?.emit("offer", payload)
                 }
-                socket?.emit("offer", payload)
             }
         }, MediaConstraints())
     }
@@ -165,7 +182,9 @@ class MainActivity : AppCompatActivity() {
         for (name in enumerator.deviceNames) {
             if (enumerator.isFrontFacing(name)) return enumerator.createCapturer(name, null)
         }
-        return enumerator.createCapturer(enumerator.deviceNames[0], null)
+        return if (enumerator.deviceNames.isNotEmpty()) {
+            enumerator.createCapturer(enumerator.deviceNames[0], null)
+        } else null
     }
 
     private fun stopStream() {
