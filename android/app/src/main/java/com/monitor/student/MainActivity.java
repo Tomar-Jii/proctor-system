@@ -16,7 +16,6 @@ import android.widget.EditText;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
@@ -34,7 +33,6 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
 
     private Socket socket;
     private Camera camera;
-    private SurfaceView surfaceView;
     private SurfaceHolder surfaceHolder;
     private boolean isSurfaceReady = false;
     private boolean isStreaming = false;
@@ -54,7 +52,7 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
         etServerUrl = findViewById(R.id.etServerUrl);
         etStudentName = findViewById(R.id.etStudentName);
         Button btnConnect = findViewById(R.id.btnConnect);
-        surfaceView = findViewById(R.id.surfaceView);
+        SurfaceView surfaceView = findViewById(R.id.surfaceView);
 
         surfaceHolder = surfaceView.getHolder();
         surfaceHolder.addCallback(this);
@@ -69,7 +67,7 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
             if (!url.isEmpty() && !name.isEmpty()) {
                 connectToServer(url, name);
             } else {
-                Toast.makeText(this, "URL and Name are required", Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, "URL and Name are required", Toast.LENGTH_SHORT).show() ;
             }
         });
     }
@@ -141,7 +139,7 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
 
             camera.setPreviewCallback((data, cam) -> {
                 long now = System.currentTimeMillis();
-                if (isStreaming && now - lastFrameTime > 120 && socket != null && socket.connected()) {
+                if (isStreaming && now - lastFrameTime > 120 && socket != null && socket.connected() && data != null) {
                     lastFrameTime = now;
                     try {
                         YuvImage yuvImage = new YuvImage(data, ImageFormat.NV21, pWidth, pHeight, null);
@@ -186,7 +184,7 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
     }
 
     @Override
-    public void surfaceCreated(@NonNull SurfaceHolder holder) {
+    public void surfaceCreated(SurfaceHolder holder) {
         isSurfaceReady = true;
         surfaceHolder = holder;
         if (isStreaming && camera != null) {
@@ -197,10 +195,10 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
     }
 
     @Override
-    public void surfaceChanged(@NonNull SurfaceHolder holder, int format, int width, int height) {}
+    public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {}
 
     @Override
-    public void surfaceDestroyed(@NonNull SurfaceHolder holder) {
+    public void surfaceDestroyed(SurfaceHolder holder) {
         isSurfaceReady = false;
     }
 
