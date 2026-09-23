@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/mainLayout"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
@@ -8,6 +9,7 @@
     android:background="#121212">
 
     <TextView
+        android:id="@+id/tvTitle"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="Classroom Monitor"
@@ -43,6 +45,16 @@
         android:backgroundTint="#3B82F6"
         android:textColor="#FFFFFF" />
 
+    <Button
+        android:id="@+id/btnMinimize"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Minimize & Open Study App"
+        android:backgroundTint="#10B981"
+        android:textColor="#FFFFFF"
+        android:layout_marginTop="12dp"
+        android:visibility="gone" />
+
     <TextView
         android:id="@+id/tvStatus"
         android:layout_width="wrap_content"
@@ -51,9 +63,12 @@
         android:textColor="#AAAAAA"
         android:layout_marginTop="16dp" />
 
-    <SurfaceView
-        android:id="@+id/surfaceView"
-        android:layout_width="160dp"
-        android:layout_height="120dp"
-        android:layout_marginTop="20dp" />
+    <TextView
+        android:id="@+id/tvPipNotice"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="● Monitoring Active in Floating Mode"
+        android:textColor="#10B981"
+        android:textSize="12sp"
+        android:visibility="gone" />
 </LinearLayout>

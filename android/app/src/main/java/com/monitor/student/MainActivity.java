@@ -1,8 +1,10 @@
 package com.monitor.student;
 
 import android.Manifest;
+import android.app.PictureInPictureParams;
 import android.content.Context;
 import android.content.pm.PackageManager;
+import android.content.res.Configuration;
 import android.graphics.ImageFormat;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
@@ -14,11 +16,14 @@ import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.media.Image;
 import android.media.ImageReader;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.util.Base64;
+import android.util.Rational;
 import android.util.Size;
+import android.view.View;
 import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.EditText;
@@ -51,9 +56,13 @@ public class MainActivity extends AppCompatActivity {
     private boolean isStreaming = false;
     private long lastFrameTime = 0;
 
+    private TextView tvTitle;
     private TextView tvStatus;
+    private TextView tvPipNotice;
     private EditText etServerUrl;
     private EditText etStudentName;
+    private Button btnConnect;
+    private Button btnMinimize;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -61,10 +70,13 @@ public class MainActivity extends AppCompatActivity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         setContentView(R.layout.activity_main);
 
+        tvTitle = findViewById(R.id.tvTitle);
         tvStatus = findViewById(R.id.tvStatus);
+        tvPipNotice = findViewById(R.id.tvPipNotice);
         etServerUrl = findViewById(R.id.etServerUrl);
         etStudentName = findViewById(R.id.etStudentName);
-        Button btnConnect = findViewById(R.id.btnConnect);
+        btnConnect = findViewById(R.id.btnConnect);
+        btnMinimize = findViewById(R.id.btnMinimize);
 
         checkCameraPermission();
 
@@ -81,6 +93,8 @@ public class MainActivity extends AppCompatActivity {
                 Toast.makeText(this, "URL and Name are required", Toast.LENGTH_SHORT).show();
             }
         });
+
+        btnMinimize.setOnClickListener(v -> enterPipMode());
     }
 
     private boolean checkCameraPermission() {
@@ -89,6 +103,50 @@ public class MainActivity extends AppCompatActivity {
             return false;
         }
         return true;
+    }
+
+    private void enterPipMode() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                PictureInPictureParams params = new PictureInPictureParams.Builder()
+                        .setAspectRatio(new Rational(1, 1))
+                        .build();
+                enterPictureInPictureMode(params);
+            } catch (Exception ignored) {}
+        } else {
+            Toast.makeText(this, "PiP not supported on this Android version", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    @Override
+    protected void onUserLeaveHint() {
+        super.onUserLeaveHint();
+        // Home button dabate hi auto floating mode ban jayega
+        if (socket != null && socket.connected()) {
+            enterPipMode();
+        }
+    }
+
+    @Override
+    public void onPictureInPictureModeChanged(boolean isInPictureInPictureMode, Configuration newConfig) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);
+        if (isInPictureInPictureMode) {
+            tvTitle.setVisibility(View.GONE);
+            etServerUrl.setVisibility(View.GONE);
+            etStudentName.setVisibility(View.GONE);
+            btnConnect.setVisibility(View.GONE);
+            btnMinimize.setVisibility(View.GONE);
+            tvStatus.setVisibility(View.GONE);
+            tvPipNotice.setVisibility(View.VISIBLE);
+        } else {
+            tvTitle.setVisibility(View.VISIBLE);
+            etServerUrl.setVisibility(View.VISIBLE);
+            etStudentName.setVisibility(View.VISIBLE);
+            btnConnect.setVisibility(View.VISIBLE);
+            btnMinimize.setVisibility(socket != null && socket.connected() ? View.VISIBLE : View.GONE);
+            tvStatus.setVisibility(View.VISIBLE);
+            tvPipNotice.setVisibility(View.GONE);
+        }
     }
 
     private void startBackgroundThread() {
@@ -119,6 +177,7 @@ public class MainActivity extends AppCompatActivity {
 
             socket.on(Socket.EVENT_CONNECT, args -> runOnUiThread(() -> {
                 tvStatus.setText("Status: Online & Ready");
+                btnMinimize.setVisibility(View.VISIBLE);
                 try {
                     JSONObject reg = new JSONObject();
                     reg.put("role", "student");
@@ -139,6 +198,7 @@ public class MainActivity extends AppCompatActivity {
 
             socket.on(Socket.EVENT_DISCONNECT, args -> runOnUiThread(() -> {
                 tvStatus.setText("Status: Disconnected");
+                btnMinimize.setVisibility(View.GONE);
                 stopCamera2Stream();
             }));
 
@@ -166,10 +226,7 @@ public class MainActivity extends AppCompatActivity {
                 cameraId = manager.getCameraIdList()[0];
             }
 
-            if (cameraId == null) {
-                tvStatus.setText("No camera found");
-                return;
-            }
+            if (cameraId == null) return;
 
             CameraCharacteristics characteristics = manager.getCameraCharacteristics(cameraId);
             StreamConfigurationMap map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
@@ -231,19 +288,13 @@ public class MainActivity extends AppCompatActivity {
                                 try {
                                     session.setRepeatingRequest(builder.build(), null, backgroundHandler);
                                     isStreaming = true;
-                                } catch (Exception e) {
-                                    runOnUiThread(() -> tvStatus.setText("Stream Error: " + e.getMessage()));
-                                }
+                                } catch (Exception ignored) {}
                             }
 
                             @Override
-                            public void onConfigureFailed(@NonNull CameraCaptureSession session) {
-                                runOnUiThread(() -> tvStatus.setText("Session configuration failed"));
-                            }
+                            public void onConfigureFailed(@NonNull CameraCaptureSession session) {}
                         }, backgroundHandler);
-                    } catch (Exception e) {
-                        runOnUiThread(() -> tvStatus.setText("Capture Request Error: " + e.getMessage()));
-                    }
+                    } catch (Exception ignored) {}
                 }
 
                 @Override
@@ -258,13 +309,10 @@ public class MainActivity extends AppCompatActivity {
                     camera.close();
                     cameraDevice = null;
                     isStreaming = false;
-                    runOnUiThread(() -> tvStatus.setText("Camera2 Error: Code " + error));
                 }
             }, backgroundHandler);
 
-        } catch (CameraAccessException e) {
-            tvStatus.setText("Camera Access Error: " + e.getMessage());
-        }
+        } catch (CameraAccessException ignored) {}
     }
 
     private void stopCamera2Stream() {
